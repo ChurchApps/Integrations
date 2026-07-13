@@ -1,0 +1,17 @@
+{
+  "name": "b1-church-zapier",
+  "version": "1.0.0",
+  "description": "The official B1.church app for Zapier",
+  "main": "index.js",
+  "private": true,
+  "scripts": {
+    "test": "node --test",
+    "validate": "zapier validate"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "zapier-platform-core": "17.0.0"
+  }
+}
