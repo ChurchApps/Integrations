@@ -82,7 +82,7 @@ const triggers = {
     key: "new_person",
     noun: "Person",
     label: "New Person",
-    description: "Fires when a person is added in B1.",
+    description: "Triggers when a person is added in B1.",
     event: "person.created",
     listUrl: "/membership/people/recent",
     sample: SAMPLES.person
@@ -91,7 +91,7 @@ const triggers = {
     key: "updated_person",
     noun: "Person",
     label: "Updated Person",
-    description: "Fires when a person record is changed in B1.",
+    description: "Triggers when a person record is changed in B1.",
     event: "person.updated",
     listUrl: "/membership/people/recent",
     sample: SAMPLES.person
@@ -100,7 +100,7 @@ const triggers = {
     key: "new_donation",
     noun: "Donation",
     label: "New Donation",
-    description: "Fires when a gift is recorded in B1 — manual entry, online, or the pending → complete transition.",
+    description: "Triggers when a gift is recorded in B1 — manual entry, online, or the pending → complete transition.",
     event: "donation.created",
     listUrl: "/giving/donations",
     listTransform: byDateDesc("donationDate"),
@@ -110,7 +110,7 @@ const triggers = {
     key: "new_group_member",
     noun: "Group Member",
     label: "New Group Member",
-    description: "Fires when a person is added to a group in B1.",
+    description: "Triggers when a person is added to a group in B1.",
     event: "group.member.added",
     listUrl: "/membership/groupmembers",
     sample: SAMPLES.groupMember
@@ -119,7 +119,7 @@ const triggers = {
     key: "new_form_submission",
     noun: "Form Submission",
     label: "New Form Submission",
-    description: "Fires when a form is submitted in B1.",
+    description: "Triggers when a form is submitted in B1.",
     event: "form.submission.created",
     listUrl: "/membership/formsubmissions",
     sample: SAMPLES.formSubmission

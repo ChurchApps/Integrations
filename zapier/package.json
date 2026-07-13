@@ -1,6 +1,6 @@
 {
   "name": "b1-church-zapier",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "The official B1.church app for Zapier",
   "main": "index.js",
   "private": true,
