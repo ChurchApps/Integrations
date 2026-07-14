@@ -38,10 +38,16 @@ const authentication = {
 
 const SAMPLES = {
   person: { id: "smpl_person", churchId: "smpl_church", name: { display: "Sample Person", first: "Sample", last: "Person" }, contactInfo: { email: "sample@example.com" } },
-  donation: { id: "smpl_donation", churchId: "smpl_church", personId: "smpl_person", batchId: "smpl_batch", donationDate: "2026-01-15T00:00:00.000Z", amount: 50, currency: "USD", method: "card", status: "complete" },
-  groupMember: { id: "smpl_groupmember", churchId: "smpl_church", groupId: "smpl_group", personId: "smpl_person" },
-  formSubmission: { id: "smpl_formsubmission", churchId: "smpl_church", formId: "smpl_form", contentType: "person", contentId: "smpl_person" }
+  donation: { id: "smpl_donation", churchId: "smpl_church", personId: "smpl_person", personName: "Sample Person", batchId: "smpl_batch", donationDate: "2026-01-15T00:00:00.000Z", amount: 50, method: "card", status: "complete" },
+  groupMember: { id: "smpl_groupmember", churchId: "smpl_church", groupId: "smpl_group", groupName: "Sample Group", personId: "smpl_person", personName: "Sample Person" },
+  formSubmission: { id: "smpl_formsubmission", churchId: "smpl_church", formId: "smpl_form", formName: "Sample Form", contentType: "person", contentId: "smpl_person", personName: "Sample Person" }
 };
+
+// Hook payloads only contain the fields that were set when the record was saved,
+// while the REST list endpoints return full DB rows. Zapier flags sample fields
+// that never appear in real task history, so polling rows are projected down to
+// the sample's keys.
+const pick = (keys) => (row) => Object.fromEntries(keys.filter((k) => row[k] !== undefined).map((k) => [k, row[k]]));
 
 const hookTrigger = ({ key, noun, label, description, event, listUrl, listTransform, sample }) => ({
   key,
@@ -66,7 +72,10 @@ const hookTrigger = ({ key, noun, label, description, event, listUrl, listTransf
       try {
         const res = await z.request(`${base(bundle)}${listUrl}`);
         const rows = Array.isArray(res.data) ? res.data : [];
-        return (listTransform ? listTransform(rows) : rows).filter((r) => r && r.id).slice(0, 10);
+        return (listTransform ? listTransform(rows) : rows)
+          .filter((r) => r && r.id)
+          .slice(0, 10)
+          .map(pick(Object.keys(sample)));
       } catch (e) {
         return []; // key may lack a read scope — Zapier falls back to the static sample
       }

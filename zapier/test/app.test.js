@@ -47,6 +47,13 @@ test("perform unwraps the B1 envelope", () => {
   assert.deepEqual(out, [{ id: "p1", name: { first: "A" } }]);
 });
 
+test("performList projects rows down to the sample's keys", async () => {
+  const row = { id: "d1", churchId: "c1", amount: 10, currency: "USD", notes: "n", transactionId: "t1", methodDetails: "x", donationDate: "2026-01-02T00:00:00Z" };
+  const z = fakeZ([[row]]);
+  const [out] = await App.triggers.new_donation.operation.performList(z, bundle);
+  assert.deepEqual(out, { id: "d1", churchId: "c1", amount: 10, donationDate: "2026-01-02T00:00:00Z" });
+});
+
 test("performList falls back to empty (→ static sample) when the key lacks a read scope", async () => {
   const z = { request: async () => { throw new Error("403"); } };
   const out = await App.triggers.new_person.operation.performList(z, bundle);
