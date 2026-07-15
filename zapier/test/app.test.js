@@ -20,8 +20,8 @@ test("app surface matches the support docs", () => {
     Object.keys(App.triggers).sort(),
     ["list_funds", "list_groups", "list_people", "new_donation", "new_form_submission", "new_group_member", "new_person", "updated_person"]
   );
-  assert.deepEqual(Object.keys(App.creates).sort(), ["add_donation", "add_group_member", "create_person"]);
-  assert.deepEqual(Object.keys(App.searches), ["find_person"]);
+  assert.deepEqual(Object.keys(App.creates).sort(), ["add_donation", "add_group_member", "create_person", "find_person"]);
+  assert.equal(App.searches, undefined);
   for (const key of ["new_person", "updated_person", "new_donation", "new_group_member", "new_form_submission"]) {
     assert.equal(App.triggers[key].operation.type, "hook", key);
   }
@@ -70,14 +70,26 @@ test("add_donation writes the fund allocation when a fund is chosen", async () =
 
 test("find_person prefers email over name and respects a custom apiUrl", async () => {
   const z = fakeZ([[{ id: "p1" }]]);
+  z.errors = { Error: class extends Error {} };
   const b = { authData: { apiKey: "cak_x.y", apiUrl: "http://localhost:8084/" }, inputData: { email: "a@b.com", term: "ignored" } };
-  await App.searches.find_person.operation.perform(z, b);
+  const out = await App.creates.find_person.operation.perform(z, b);
   assert.equal(z.calls[0].url, "http://localhost:8084/membership/people/search?email=a%40b.com");
+  assert.deepEqual(out, { id: "p1" });
 });
 
 test("find_person does an exact id lookup when personId is given", async () => {
   const z = fakeZ([{ id: "p9", name: { display: "X" } }]);
-  const out = await App.searches.find_person.operation.perform(z, { ...bundle, inputData: { personId: "p9", email: "ignored@b.com" } });
+  z.errors = { Error: class extends Error {} };
+  const out = await App.creates.find_person.operation.perform(z, { ...bundle, inputData: { personId: "p9", email: "ignored@b.com" } });
   assert.equal(z.calls[0].url, "https://api.churchapps.org/membership/people/p9");
-  assert.deepEqual(out, [{ id: "p9", name: { display: "X" } }]);
+  assert.deepEqual(out, { id: "p9", name: { display: "X" } });
+});
+
+test("find_person fails the task when nobody matches", async () => {
+  const z = fakeZ([[]]);
+  z.errors = { Error: class extends Error {} };
+  await assert.rejects(
+    App.creates.find_person.operation.perform(z, { ...bundle, inputData: { email: "nobody@b.com" } }),
+    /No person found/
+  );
 });

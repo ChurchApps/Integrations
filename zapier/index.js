@@ -1,6 +1,6 @@
 const { version } = require("./package.json");
 // Must exactly match the zapier-platform-core version in package.json.
-const platformVersion = "17.0.0";
+const platformVersion = "19.0.0";
 
 const base = (bundle) => (bundle.authData.apiUrl || "https://api.churchapps.org").replace(/\/+$/, "");
 
@@ -17,7 +17,7 @@ const authentication = {
       label: "API Key",
       type: "password",
       required: true,
-      helpText: "Create one in B1Admin under **Settings → Developer → API Keys**. Include the `settings:write` scope if any of your Zaps use a B1 trigger, plus the scopes your actions need (e.g. `people:write`, `donations:write`)."
+      helpText: "Create one in B1Admin under **Settings → Developer → API Keys** ([instructions](https://support.churchapps.org/docs/developer/api/api-keys)). Include the `settings:write` scope if any of your Zaps use a B1 trigger, plus the scopes your actions need (e.g. `people:write`, `donations:write`)."
     },
     {
       key: "apiUrl",
@@ -30,6 +30,10 @@ const authentication = {
   // Triggers need settings:write anyway, so validating against the webhook
   // catalog both proves the key works and catches the most common bad key early.
   test: async (z, bundle) => {
+    const apiUrl = (bundle.authData.apiUrl || "").trim();
+    if (apiUrl && !/^https?:\/\/[^/\s]+\.[^/\s]+/.test(apiUrl)) {
+      throw new z.errors.Error("API URL must be a full URL starting with https:// (e.g. https://api.example.com), or left blank for hosted B1.", "InvalidApiUrl");
+    }
     const res = await z.request(`${base(bundle)}/membership/webhooks/events`);
     return { connected: true, eventCount: res.data.all ? res.data.all.length : 0 };
   },
@@ -38,7 +42,8 @@ const authentication = {
 
 const SAMPLES = {
   person: { id: "smpl_person", churchId: "smpl_church", name: { display: "Sample Person", first: "Sample", last: "Person" }, contactInfo: { email: "sample@example.com" } },
-  donation: { id: "smpl_donation", churchId: "smpl_church", personId: "smpl_person", personName: "Sample Person", batchId: "smpl_batch", donationDate: "2026-01-15T00:00:00.000Z", amount: 50, method: "card", status: "complete" },
+  // ponytail: sample keys must be a subset of every delivered payload (Zapier T004) — batchId/method/currency vary by entry path, so they stay out.
+  donation: { id: "smpl_donation", churchId: "smpl_church", personId: "smpl_person", personName: "Sample Person", donationDate: "2026-01-15T00:00:00.000Z", amount: 50, status: "complete" },
   groupMember: { id: "smpl_groupmember", churchId: "smpl_church", groupId: "smpl_group", groupName: "Sample Group", personId: "smpl_person", personName: "Sample Person" },
   formSubmission: { id: "smpl_formsubmission", churchId: "smpl_church", formId: "smpl_form", formName: "Sample Form", contentType: "person", contentId: "smpl_person", personName: "Sample Person" }
 };
@@ -164,7 +169,37 @@ const triggers = {
   }
 };
 
+// An action rather than a search: searches can't be a Zap's last step, which
+// makes them untestable on free (2-step) plans. No match = explicit task error.
+const findPerson = {
+  key: "find_person",
+  noun: "Person",
+  display: { label: "Find Person", description: "Looks up a person by id, email, or name. Fails the task if nobody matches. Requires the `people:read` scope." },
+  operation: {
+    inputFields: [
+      { key: "personId", label: "Person", dynamic: "list_people.id.name__display", helpText: "Exact id lookup — pick a person or map a trigger's `personId` field. Takes precedence over email and name." },
+      { key: "email", label: "Email", helpText: "Exact email match. Takes precedence over name." },
+      { key: "term", label: "Name" }
+    ],
+    perform: async (z, bundle) => {
+      const { personId, email, term } = bundle.inputData;
+      if (personId) {
+        const res = await z.request(`${base(bundle)}/membership/people/${encodeURIComponent(personId)}`);
+        if (!res.data) throw new z.errors.Error(`No person found with id "${personId}".`, "PersonNotFound", 404);
+        return res.data;
+      }
+      const qs = email ? `email=${encodeURIComponent(email)}` : `term=${encodeURIComponent(term || "")}`;
+      const res = await z.request(`${base(bundle)}/membership/people/search?${qs}`);
+      const matches = Array.isArray(res.data) ? res.data : [];
+      if (!matches.length) throw new z.errors.Error(`No person found matching ${email ? `email "${email}"` : `name "${term || ""}"`}.`, "PersonNotFound", 404);
+      return matches[0];
+    },
+    sample: SAMPLES.person
+  }
+};
+
 const creates = {
+  find_person: findPerson,
   create_person: {
     key: "create_person",
     noun: "Person",
@@ -195,7 +230,7 @@ const creates = {
     operation: {
       inputFields: [
         { key: "amount", label: "Amount", type: "number", required: true },
-        { key: "personId", label: "Person", dynamic: "list_people.id.name__display", search: "find_person.id", helpText: "Leave blank for an anonymous gift." },
+        { key: "personId", label: "Person", dynamic: "list_people.id.name__display", helpText: "Leave blank for an anonymous gift." },
         { key: "fundId", label: "Fund", dynamic: "list_funds.id.name" },
         { key: "donationDate", label: "Donation Date", type: "datetime", helpText: "Defaults to now." },
         { key: "method", label: "Method", helpText: "e.g. Cash, Check, Card" },
@@ -228,7 +263,7 @@ const creates = {
     operation: {
       inputFields: [
         { key: "groupId", label: "Group", required: true, dynamic: "list_groups.id.name" },
-        { key: "personId", label: "Person", required: true, dynamic: "list_people.id.name__display", search: "find_person.id" }
+        { key: "personId", label: "Person", required: true, dynamic: "list_people.id.name__display" }
       ],
       perform: async (z, bundle) => {
         const { groupId, personId } = bundle.inputData;
@@ -244,38 +279,13 @@ const creates = {
   }
 };
 
-const searches = {
-  find_person: {
-    key: "find_person",
-    noun: "Person",
-    display: { label: "Find Person", description: "Looks up a person by id, email, or name. Requires the `people:read` scope." },
-    operation: {
-      inputFields: [
-        { key: "personId", label: "Person ID", helpText: "Exact id lookup (e.g. from a trigger's `personId` field). Takes precedence over email and name." },
-        { key: "email", label: "Email", helpText: "Exact email match. Takes precedence over name." },
-        { key: "term", label: "Name" }
-      ],
-      perform: async (z, bundle) => {
-        const { personId, email, term } = bundle.inputData;
-        if (personId) {
-          const res = await z.request(`${base(bundle)}/membership/people/${encodeURIComponent(personId)}`);
-          return res.data ? [res.data] : [];
-        }
-        const qs = email ? `email=${encodeURIComponent(email)}` : `term=${encodeURIComponent(term || "")}`;
-        const res = await z.request(`${base(bundle)}/membership/people/search?${qs}`);
-        return Array.isArray(res.data) ? res.data : [];
-      },
-      sample: SAMPLES.person
-    }
-  }
-};
-
 module.exports = {
   version,
   platformVersion,
+  // Empty inputs reach perform as-is; every perform uses truthy checks, so no auto-cleaning needed.
+  flags: { cleanInputData: false },
   authentication,
   beforeRequest: [addAuth],
   triggers,
-  creates,
-  searches
+  creates
 };
