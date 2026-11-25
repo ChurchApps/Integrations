@@ -135,7 +135,7 @@ const TRIGGERS = [
   { key: "updated_household", noun: "Household", label: "Updated Household", event: "household.updated", description: "Triggers when a household is edited in B1.", listUrl: "/membership/households", listScope: "people:read", sample: SAMPLES.household },
   { key: "deleted_household", noun: "Household", label: "Deleted Household", event: "household.destroyed", description: "Triggers when a household is deleted in B1.", sample: deleted("smpl_household") },
 
-  { key: "new_donation", noun: "Donation", label: "New Donation", event: "donation.created", description: "Triggers when a gift is recorded in B1 — manual entry, online, or the pending → complete transition.", listUrl: "/giving/donations", listScope: "donations:read", listTransform: byDateDesc("donationDate"), sample: SAMPLES.donation },
+  { key: "new_donation", noun: "Donation", label: "New Donation", event: "donation.created", description: "Triggers when a gift is recorded in B1, by manual entry or online giving.", listUrl: "/giving/donations", listScope: "donations:read", listTransform: byDateDesc("donationDate"), sample: SAMPLES.donation },
   { key: "updated_donation", noun: "Donation", label: "Updated Donation", event: "donation.updated", description: "Triggers when an existing donation is edited in B1.", listUrl: "/giving/donations", listScope: "donations:read", listTransform: byDateDesc("donationDate"), sample: { ...SAMPLES.donation, personEmail: "sample@example.com" } },
 
   { key: "new_attendance_record", noun: "Attendance Record", label: "New Attendance Record", event: "attendance.recorded", description: "Triggers when a person's attendance is recorded in B1, by check-in or by marking them present.", sample: SAMPLES.attendance },
