@@ -191,6 +191,12 @@ const triggers = {
 
 const text = (value) => String(value || "").trim();
 
+const FIND_PERSON_FIELDS = [
+  { key: "personId", label: "Person", dynamic: "list_people.id.name__display", helpText: "Exact id lookup — pick a person or map a trigger's `personId` field. Takes precedence over email and name." },
+  { key: "email", label: "Email", helpText: "Exact email match. Takes precedence over name." },
+  { key: "term", label: "Name", helpText: "Matches part of a name. If several people match, the first by last name is used." }
+];
+
 // The API matches emails by substring and treats a blank term as "everyone", so emails
 // are narrowed to exact matches and a blank lookup finds nobody.
 const findPeople = async (z, bundle) => {
@@ -208,18 +214,14 @@ const findPeople = async (z, bundle) => {
   return email ? matches.filter((p) => text((p.contactInfo || {}).email).toLowerCase() === email.toLowerCase()) : matches;
 };
 
-// An action rather than a search: searches can't be a Zap's last step, which
-// makes them untestable on free (2-step) plans. No match = explicit task error.
+// Kept as an action next to the find_person search: a search can't be a Zap's last
+// step, which makes it untestable on free (2-step) plans. No match = explicit task error.
 const findPerson = {
   key: "find_person",
   noun: "Person",
   display: { label: "Find Person", description: "Looks up a person by id, email, or name. Fails the task if nobody matches. Requires the `people:read` scope." },
   operation: {
-    inputFields: [
-      { key: "personId", label: "Person", dynamic: "list_people.id.name__display", helpText: "Exact id lookup — pick a person or map a trigger's `personId` field. Takes precedence over email and name." },
-      { key: "email", label: "Email", helpText: "Exact email match. Takes precedence over name." },
-      { key: "term", label: "Name" }
-    ],
+    inputFields: FIND_PERSON_FIELDS,
     perform: async (z, bundle) => {
       const { personId, email, term } = bundle.inputData;
       const [person] = await findPeople(z, bundle);
@@ -373,6 +375,43 @@ const creates = {
   }
 };
 
+const searches = {
+  find_person: {
+    key: "find_person",
+    noun: "Person",
+    display: { label: "Find Person", description: "Finds a person by id, email, or name. Requires the `people:read` scope." },
+    operation: {
+      inputFields: FIND_PERSON_FIELDS,
+      perform: findPeople,
+      sample: SAMPLES.person
+    }
+  },
+  find_group: {
+    key: "find_group",
+    noun: "Group",
+    display: { label: "Find Group", description: "Finds a group by its exact name, ignoring case. Works with any API key; it needs no extra scope." },
+    operation: {
+      inputFields: [{ key: "name", label: "Name", required: true }],
+      perform: async (z, bundle) => {
+        const name = text(bundle.inputData.name).toLowerCase();
+        if (!name) return [];
+        const res = await z.request(`${base(bundle)}/membership/groups`);
+        return (Array.isArray(res.data) ? res.data : []).filter((g) => text(g.name).toLowerCase() === name);
+      },
+      sample: SAMPLES.group
+    }
+  }
+};
+
+const searchOrCreates = {
+  find_person: {
+    key: "find_person",
+    display: { label: "Find or Create Person", description: "Finds a person by id, email, or name, and creates one if nobody matches. Requires the `people:write` scope." },
+    search: "find_person",
+    create: "create_person"
+  }
+};
+
 module.exports = {
   version,
   platformVersion,
@@ -381,5 +420,7 @@ module.exports = {
   authentication,
   beforeRequest: [addAuth],
   triggers,
-  creates
+  creates,
+  searches,
+  searchOrCreates
 };

@@ -63,7 +63,8 @@ test("app surface matches the support docs", () => {
     [...HOOKS.map(([key]) => key), "list_funds", "list_groups", "list_people"].sort()
   );
   assert.deepEqual(Object.keys(App.creates).sort(), ["add_donation", "add_group_member", "create_person", "find_person", "remove_group_member", "update_person"]);
-  assert.equal(App.searches, undefined);
+  assert.deepEqual(Object.keys(App.searches).sort(), ["find_group", "find_person"]);
+  assert.deepEqual(Object.keys(App.searchOrCreates), ["find_person"]);
 });
 
 test("there is one hook trigger per webhook event, following Zapier's publishing conventions", () => {
@@ -304,4 +305,59 @@ test("find_person fails the task when nobody matches", async () => {
     App.creates.find_person.operation.perform(z, { ...bundle, inputData: { email: "nobody@b.com" } }),
     /No person found/
   );
+});
+
+test("searches follow Zapier's conventions and Find or Create Person pairs a real search with a real create", () => {
+  for (const [key, search] of Object.entries(App.searches)) {
+    assert.equal(search.key, key);
+    assert.ok(search.noun, key);
+    assert.match(search.display.label, /^Find [A-Z][a-z]+$/, key);
+    assert.match(search.display.description, /^Finds .+ scope\.$/, key);
+    assert.ok(search.operation.sample.id, key);
+  }
+  const pair = App.searchOrCreates.find_person;
+  assert.equal(pair.key, "find_person");
+  assert.equal(pair.display.label, "Find or Create Person");
+  assert.match(pair.display.description, /`people:write` scope\.$/);
+  assert.ok(App.searches[pair.key]);
+  assert.ok(App.searches[pair.search]);
+  assert.ok(App.creates[pair.create]);
+});
+
+test("find_person search returns the person for an id, and nothing when the id is unknown", async () => {
+  const z = fakeZ([{ id: "p9", name: { display: "X" } }, null]);
+  const perform = App.searches.find_person.operation.perform;
+  assert.deepEqual(await perform(z, { ...bundle, inputData: { personId: "p9", email: "ignored@b.com" } }), [{ id: "p9", name: { display: "X" } }]);
+  assert.equal(z.calls[0].url, "https://api.churchapps.org/membership/people/p9");
+  assert.deepEqual(await perform(z, { ...bundle, inputData: { personId: "nope" } }), []);
+});
+
+test("find_person search keeps exact email matches only, so Find or Create never reuses a near match", async () => {
+  const ann = { id: "p1", contactInfo: { email: "Ann@Example.com" } };
+  const joann = { id: "p2", contactInfo: { email: "joann@example.com" } };
+  const z = fakeZ([[joann, ann], [joann]]);
+  const perform = App.searches.find_person.operation.perform;
+  assert.deepEqual(await perform(z, { ...bundle, inputData: { email: " ann@example.com ", term: "ignored" } }), [ann]);
+  assert.equal(z.calls[0].url, "https://api.churchapps.org/membership/people/search?email=ann%40example.com");
+  assert.deepEqual(await perform(z, { ...bundle, inputData: { email: "ann@example.com" } }), []);
+});
+
+test("find_person search by name returns every match, and a blank lookup finds nobody without calling the API", async () => {
+  const z = fakeZ([[{ id: "p1" }, { id: "p2" }]]);
+  const perform = App.searches.find_person.operation.perform;
+  assert.deepEqual(await perform(z, { ...bundle, inputData: { term: "Sam Smith" } }), [{ id: "p1" }, { id: "p2" }]);
+  assert.equal(z.calls[0].url, "https://api.churchapps.org/membership/people/search?term=Sam%20Smith");
+  assert.deepEqual(await perform(z, { ...bundle, inputData: { personId: "", email: " ", term: "" } }), []);
+  assert.equal(z.calls.length, 1);
+});
+
+test("find_group matches the exact name, ignoring case, and skips partial matches", async () => {
+  const groups = [{ id: "g1", name: "Youth Leaders" }, { id: "g2", name: "Youth" }, { id: "g3", name: null }];
+  const z = fakeZ([groups, groups]);
+  const perform = App.searches.find_group.operation.perform;
+  assert.deepEqual(await perform(z, { ...bundle, inputData: { name: " youth " } }), [{ id: "g2", name: "Youth" }]);
+  assert.equal(z.calls[0].url, "https://api.churchapps.org/membership/groups");
+  assert.deepEqual(await perform(z, { ...bundle, inputData: { name: "Yout" } }), []);
+  assert.deepEqual(await perform(z, { ...bundle, inputData: { name: "" } }), []);
+  assert.equal(z.calls.length, 2);
 });
