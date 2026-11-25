@@ -62,7 +62,7 @@ test("app surface matches the support docs", () => {
     Object.keys(App.triggers).sort(),
     [...HOOKS.map(([key]) => key), "list_funds", "list_groups", "list_people"].sort()
   );
-  assert.deepEqual(Object.keys(App.creates).sort(), ["add_donation", "add_group_member", "create_person", "find_person", "remove_group_member"]);
+  assert.deepEqual(Object.keys(App.creates).sort(), ["add_donation", "add_group_member", "create_person", "find_person", "remove_group_member", "update_person"]);
   assert.equal(App.searches, undefined);
 });
 
@@ -194,6 +194,56 @@ test("add_donation writes the fund allocation when a fund is chosen", async () =
   assert.equal(z.calls[1].url, "https://api.churchapps.org/giving/funddonations");
   assert.deepEqual(z.calls[1].body, [{ donationId: "d1", fundId: "f1", amount: 25 }]);
   assert.equal(out.fundId, "f1");
+});
+
+const fullPerson = () => ({
+  id: "p1",
+  churchId: "c1",
+  name: { display: "Old Name", first: "Old", last: "Name", middle: null, nick: null, prefix: null, suffix: null },
+  contactInfo: { email: "old@b.com", mobilePhone: "555-0100", homePhone: "555-0199", address1: "1 Main St" },
+  birthDate: "1990-06-15T00:00:00.000Z",
+  householdId: "h1",
+  membershipStatus: "Visitor",
+  formSubmissions: [{ id: "fs1" }]
+});
+
+test("update_person sends the whole record back with only the given fields changed", async () => {
+  const z = fakeZ([fullPerson(), [{ id: "p1", name: { display: "New Name" } }]]);
+  z.errors = { Error: class extends Error {} };
+  const inputData = { personId: "p1", firstName: "New", lastName: "", email: "new@b.com", mobilePhone: "", membershipStatus: "Member" };
+  const out = await App.creates.update_person.operation.perform(z, { ...bundle, inputData });
+  assert.equal(z.calls[0].url, "https://api.churchapps.org/membership/people/p1");
+  assert.equal(z.calls[1].method, "POST");
+  assert.equal(z.calls[1].url, "https://api.churchapps.org/membership/people");
+  const { formSubmissions, ...unchanged } = fullPerson();
+  assert.deepEqual(z.calls[1].body, [{
+    ...unchanged,
+    membershipStatus: "Member",
+    name: { ...unchanged.name, first: "New" },
+    contactInfo: { ...unchanged.contactInfo, email: "new@b.com" }
+  }]);
+  assert.deepEqual(out, { id: "p1", name: { display: "New Name" } });
+});
+
+test("update_person never sends a null first or last name, which the Api would write into the display name", async () => {
+  const person = { ...fullPerson(), name: { display: "Cher", first: "Cher", last: null } };
+  const z = fakeZ([person, [person]]);
+  z.errors = { Error: class extends Error {} };
+  await App.creates.update_person.operation.perform(z, { ...bundle, inputData: { personId: "p1", email: "cher@b.com" } });
+  assert.deepEqual(z.calls[1].body[0].name, { display: "Cher", first: "Cher", last: "" });
+});
+
+test("update_person fails the task, without saving, when the person is missing or only partly readable", async () => {
+  const perform = App.creates.update_person.operation.perform;
+  const missing = fakeZ([null]);
+  missing.errors = { Error: class extends Error {} };
+  await assert.rejects(perform(missing, { ...bundle, inputData: { personId: "nope", firstName: "New" } }), /No person found with id "nope"/);
+  assert.equal(missing.calls.length, 1);
+
+  const limited = fakeZ([{ id: "p1", name: { display: "Old Name" }, contactInfo: {} }]);
+  limited.errors = { Error: class extends Error {} };
+  await assert.rejects(perform(limited, { ...bundle, inputData: { personId: "p1", firstName: "New" } }), /can't read the full person record/);
+  assert.equal(limited.calls.length, 1);
 });
 
 test("remove_group_member looks up the membership and deletes it", async () => {

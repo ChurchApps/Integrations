@@ -256,6 +256,46 @@ const creates = {
       sample: SAMPLES.person
     }
   },
+  update_person: {
+    key: "update_person",
+    noun: "Person",
+    display: { label: "Update Person", description: "Changes a person's name, contact details, or membership status in B1. Fields left blank keep their current value. Requires the `people:write` scope." },
+    operation: {
+      inputFields: [
+        { key: "personId", label: "Person", required: true, dynamic: "list_people.id.name__display" },
+        { key: "firstName", label: "First Name" },
+        { key: "lastName", label: "Last Name" },
+        { key: "email", label: "Email" },
+        { key: "mobilePhone", label: "Mobile Phone" },
+        { key: "membershipStatus", label: "Membership Status", choices: ["Visitor", "Guest", "Regular Attendee", "Member", "Staff", "Inactive", "Deceased"] }
+      ],
+      perform: async (z, bundle) => {
+        const { personId, firstName, lastName, email, mobilePhone, membershipStatus } = bundle.inputData;
+        const res = await z.request(`${base(bundle)}/membership/people/${encodeURIComponent(personId)}`);
+        if (!res.data) throw new z.errors.Error(`No person found with id "${personId}".`, "PersonNotFound", 404);
+        // Saving replaces the whole record: a field left out (birth date, anniversary) is cleared and
+        // the display name is rebuilt from first + last. So the full record is read and sent back, and
+        // the directory-only view a limited key gets (a name with no parts) is never saved.
+        const { formSubmissions, ...person } = res.data;
+        if (!person.name || !("first" in person.name)) {
+          throw new z.errors.Error("This API key can't read the full person record, so updating would erase data. Use a key with the `people:write` scope.", "PersonNotReadable", 403);
+        }
+        const changed = (fields) => Object.fromEntries(Object.entries(fields).filter(([, value]) => value));
+        const saved = await z.request({
+          method: "POST",
+          url: `${base(bundle)}/membership/people`,
+          body: [{
+            ...person,
+            ...changed({ membershipStatus }),
+            name: { ...person.name, first: firstName || person.name.first || "", last: lastName || person.name.last || "" },
+            contactInfo: { ...person.contactInfo, ...changed({ email, mobilePhone }) }
+          }]
+        });
+        return saved.data[0];
+      },
+      sample: SAMPLES.person
+    }
+  },
   add_donation: {
     key: "add_donation",
     noun: "Donation",
