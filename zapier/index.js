@@ -296,6 +296,27 @@ const creates = {
       },
       sample: SAMPLES.groupMember
     }
+  },
+  remove_group_member: {
+    key: "remove_group_member",
+    noun: "Group Member",
+    display: { label: "Remove Group Member", description: "Removes a person from a group in B1. Fails the task if they are not in the group. Requires the `groups:write` scope." },
+    operation: {
+      inputFields: [
+        { key: "groupId", label: "Group", required: true, dynamic: "list_groups.id.name" },
+        { key: "personId", label: "Person", required: true, dynamic: "list_people.id.name__display" }
+      ],
+      perform: async (z, bundle) => {
+        const { groupId, personId } = bundle.inputData;
+        // The delete endpoint takes the membership's own id, so find that first.
+        const res = await z.request(`${base(bundle)}/membership/groupmembers?personId=${encodeURIComponent(personId)}`);
+        const member = (Array.isArray(res.data) ? res.data : []).find((gm) => gm.groupId === groupId);
+        if (!member) throw new z.errors.Error("That person is not a member of that group.", "GroupMemberNotFound", 404);
+        await z.request({ method: "DELETE", url: `${base(bundle)}/membership/groupmembers/${encodeURIComponent(member.id)}` });
+        return pick(["id", "churchId", "groupId", "personId"])(member);
+      },
+      sample: { id: "smpl_groupmember", churchId: "smpl_church", groupId: "smpl_group", personId: "smpl_person" }
+    }
   }
 };
 

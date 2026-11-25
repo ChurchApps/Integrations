@@ -62,7 +62,7 @@ test("app surface matches the support docs", () => {
     Object.keys(App.triggers).sort(),
     [...HOOKS.map(([key]) => key), "list_funds", "list_groups", "list_people"].sort()
   );
-  assert.deepEqual(Object.keys(App.creates).sort(), ["add_donation", "add_group_member", "create_person", "find_person"]);
+  assert.deepEqual(Object.keys(App.creates).sort(), ["add_donation", "add_group_member", "create_person", "find_person", "remove_group_member"]);
   assert.equal(App.searches, undefined);
 });
 
@@ -194,6 +194,31 @@ test("add_donation writes the fund allocation when a fund is chosen", async () =
   assert.equal(z.calls[1].url, "https://api.churchapps.org/giving/funddonations");
   assert.deepEqual(z.calls[1].body, [{ donationId: "d1", fundId: "f1", amount: 25 }]);
   assert.equal(out.fundId, "f1");
+});
+
+test("remove_group_member looks up the membership and deletes it", async () => {
+  const memberships = [
+    { id: "gm1", churchId: "c1", groupId: "g1", personId: "p1", leader: false, group: { id: "g1", name: "One" } },
+    { id: "gm2", churchId: "c1", groupId: "g2", personId: "p1", leader: false, group: { id: "g2", name: "Two" } }
+  ];
+  const z = fakeZ([memberships, {}]);
+  z.errors = { Error: class extends Error {} };
+  const out = await App.creates.remove_group_member.operation.perform(z, { ...bundle, inputData: { groupId: "g2", personId: "p1" } });
+  assert.equal(z.calls[0].url, "https://api.churchapps.org/membership/groupmembers?personId=p1");
+  assert.equal(z.calls[1].method, "DELETE");
+  assert.equal(z.calls[1].url, "https://api.churchapps.org/membership/groupmembers/gm2");
+  assert.deepEqual(out, { id: "gm2", churchId: "c1", groupId: "g2", personId: "p1" });
+  assert.deepEqual(Object.keys(out), Object.keys(App.creates.remove_group_member.operation.sample));
+});
+
+test("remove_group_member fails the task, without deleting, when the person is not in the group", async () => {
+  const z = fakeZ([[{ id: "gm1", churchId: "c1", groupId: "g1", personId: "p1" }]]);
+  z.errors = { Error: class extends Error {} };
+  await assert.rejects(
+    App.creates.remove_group_member.operation.perform(z, { ...bundle, inputData: { groupId: "g2", personId: "p1" } }),
+    /not a member/
+  );
+  assert.equal(z.calls.length, 1);
 });
 
 test("find_person prefers email over name and respects a custom apiUrl", async () => {
