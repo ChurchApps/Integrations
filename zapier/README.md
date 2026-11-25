@@ -4,9 +4,19 @@ The official B1.church integration for Zapier, built with the Zapier CLI (`zapie
 
 ## Surface
 
-- **Triggers (REST hooks):** New Person, Updated Person, New Donation, New Group Member, New Form Submission. Turning a Zap on POSTs `/membership/webhooks` (needs an API key with `settings:write`); turning it off deletes the webhook.
-- **Actions:** Create Person, Add Donation (with optional fund allocation), Add Group Member.
-- **Search:** Find Person (by id, email, or name).
+- **Triggers (REST hooks):** one per webhook event in the Api's `WebhookEvents.ts` (25), generated from the `TRIGGERS` table in `index.js`.
+  - People: New Person, Updated Person, Deleted Person
+  - Groups: New Group, Updated Group, Deleted Group, New Group Member, Removed Group Member, New Group Join Request
+  - Households: New Household, Updated Household, Deleted Household
+  - Giving: New Donation, Updated Donation
+  - Attendance: New Attendance Record, New Attendance Checkout, New Attendance Session
+  - Forms: New Form Submission
+  - Events: New Event, Updated Event, Deleted Event, New Registration, Cancelled Registration
+  - Lists: New List Member, Removed List Member
+
+  Turning a Zap on POSTs `/membership/webhooks` (needs an API key with `settings:write`); turning it off deletes the webhook. Test data comes from a REST list where one returns rows shaped like the hook payload (people, groups, group members, households, donations, form submissions), and from the static sample for every other event.
+- **Actions:** Create Person, Update Person, Add Donation (with optional fund allocation), Add Group Member, Remove Group Member, and Find Person as an action (it can be a Zap's last step, and fails the task if nobody matches).
+- **Searches:** Find Person (by id, email, or name) and Find Group (by exact name). Find or Create Person pairs the Find Person search with Create Person.
 
 Auth is a `cak_…` API key from B1Admin (**Settings → Developer → API Keys**), sent as `Authorization: Bearer`. An optional API URL field supports self-hosted installations.
 
