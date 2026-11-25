@@ -91,53 +91,17 @@ const hookTrigger = ({ key, noun, label, description, event, listUrl, listTransf
 
 const byDateDesc = (field) => (rows) => [...rows].sort((a, b) => new Date(b[field] || 0) - new Date(a[field] || 0));
 
+// One row per webhook event (Api: src/shared/webhooks/WebhookEvents.ts).
+const TRIGGERS = [
+  { key: "new_person", noun: "Person", label: "New Person", event: "person.created", description: "Triggers when a person is added in B1.", listUrl: "/membership/people/recent", sample: SAMPLES.person },
+  { key: "updated_person", noun: "Person", label: "Updated Person", event: "person.updated", description: "Triggers when a person record is changed in B1.", listUrl: "/membership/people/recent", sample: SAMPLES.person },
+  { key: "new_donation", noun: "Donation", label: "New Donation", event: "donation.created", description: "Triggers when a gift is recorded in B1 — manual entry, online, or the pending → complete transition.", listUrl: "/giving/donations", listTransform: byDateDesc("donationDate"), sample: SAMPLES.donation },
+  { key: "new_group_member", noun: "Group Member", label: "New Group Member", event: "group.member.added", description: "Triggers when a person is added to a group in B1.", listUrl: "/membership/groupmembers", sample: SAMPLES.groupMember },
+  { key: "new_form_submission", noun: "Form Submission", label: "New Form Submission", event: "form.submission.created", description: "Triggers when a form is submitted in B1.", listUrl: "/membership/formsubmissions", sample: SAMPLES.formSubmission }
+];
+
 const triggers = {
-  new_person: hookTrigger({
-    key: "new_person",
-    noun: "Person",
-    label: "New Person",
-    description: "Triggers when a person is added in B1.",
-    event: "person.created",
-    listUrl: "/membership/people/recent",
-    sample: SAMPLES.person
-  }),
-  updated_person: hookTrigger({
-    key: "updated_person",
-    noun: "Person",
-    label: "Updated Person",
-    description: "Triggers when a person record is changed in B1.",
-    event: "person.updated",
-    listUrl: "/membership/people/recent",
-    sample: SAMPLES.person
-  }),
-  new_donation: hookTrigger({
-    key: "new_donation",
-    noun: "Donation",
-    label: "New Donation",
-    description: "Triggers when a gift is recorded in B1 — manual entry, online, or the pending → complete transition.",
-    event: "donation.created",
-    listUrl: "/giving/donations",
-    listTransform: byDateDesc("donationDate"),
-    sample: SAMPLES.donation
-  }),
-  new_group_member: hookTrigger({
-    key: "new_group_member",
-    noun: "Group Member",
-    label: "New Group Member",
-    description: "Triggers when a person is added to a group in B1.",
-    event: "group.member.added",
-    listUrl: "/membership/groupmembers",
-    sample: SAMPLES.groupMember
-  }),
-  new_form_submission: hookTrigger({
-    key: "new_form_submission",
-    noun: "Form Submission",
-    label: "New Form Submission",
-    description: "Triggers when a form is submitted in B1.",
-    event: "form.submission.created",
-    listUrl: "/membership/formsubmissions",
-    sample: SAMPLES.formSubmission
-  }),
+  ...Object.fromEntries(TRIGGERS.map((t) => [t.key, hookTrigger(t)])),
 
   // Hidden polling triggers that power dynamic dropdowns.
   list_groups: {
