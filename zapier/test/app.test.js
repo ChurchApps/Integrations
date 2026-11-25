@@ -222,12 +222,21 @@ test("remove_group_member fails the task, without deleting, when the person is n
 });
 
 test("find_person prefers email over name and respects a custom apiUrl", async () => {
-  const z = fakeZ([[{ id: "p1" }]]);
+  const z = fakeZ([[{ id: "p1", contactInfo: { email: "a@b.com" } }]]);
   z.errors = { Error: class extends Error {} };
   const b = { authData: { apiKey: "cak_x.y", apiUrl: "http://localhost:8084/" }, inputData: { email: "a@b.com", term: "ignored" } };
   const out = await App.creates.find_person.operation.perform(z, b);
   assert.equal(z.calls[0].url, "http://localhost:8084/membership/people/search?email=a%40b.com");
-  assert.deepEqual(out, { id: "p1" });
+  assert.deepEqual(out, { id: "p1", contactInfo: { email: "a@b.com" } });
+});
+
+test("find_person fails the task rather than return a partial email match or the first person for a blank lookup", async () => {
+  const z = fakeZ([[{ id: "p2", contactInfo: { email: "joann@example.com" } }]]);
+  z.errors = { Error: class extends Error {} };
+  const perform = App.creates.find_person.operation.perform;
+  await assert.rejects(perform(z, { ...bundle, inputData: { email: "ann@example.com" } }), /No person found matching email "ann@example.com"/);
+  await assert.rejects(perform(z, { ...bundle, inputData: { email: "", term: "" } }), /No person found/);
+  assert.equal(z.calls.length, 1);
 });
 
 test("find_person does an exact id lookup when personId is given", async () => {

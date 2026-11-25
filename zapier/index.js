@@ -189,6 +189,25 @@ const triggers = {
   }
 };
 
+const text = (value) => String(value || "").trim();
+
+// The API matches emails by substring and treats a blank term as "everyone", so emails
+// are narrowed to exact matches and a blank lookup finds nobody.
+const findPeople = async (z, bundle) => {
+  const personId = text(bundle.inputData.personId);
+  const email = text(bundle.inputData.email);
+  const term = text(bundle.inputData.term);
+  if (personId) {
+    const res = await z.request(`${base(bundle)}/membership/people/${encodeURIComponent(personId)}`);
+    return res.data ? [res.data] : [];
+  }
+  if (!email && !term) return [];
+  const qs = email ? `email=${encodeURIComponent(email)}` : `term=${encodeURIComponent(term)}`;
+  const res = await z.request(`${base(bundle)}/membership/people/search?${qs}`);
+  const matches = Array.isArray(res.data) ? res.data : [];
+  return email ? matches.filter((p) => text((p.contactInfo || {}).email).toLowerCase() === email.toLowerCase()) : matches;
+};
+
 // An action rather than a search: searches can't be a Zap's last step, which
 // makes them untestable on free (2-step) plans. No match = explicit task error.
 const findPerson = {
@@ -203,16 +222,10 @@ const findPerson = {
     ],
     perform: async (z, bundle) => {
       const { personId, email, term } = bundle.inputData;
-      if (personId) {
-        const res = await z.request(`${base(bundle)}/membership/people/${encodeURIComponent(personId)}`);
-        if (!res.data) throw new z.errors.Error(`No person found with id "${personId}".`, "PersonNotFound", 404);
-        return res.data;
-      }
-      const qs = email ? `email=${encodeURIComponent(email)}` : `term=${encodeURIComponent(term || "")}`;
-      const res = await z.request(`${base(bundle)}/membership/people/search?${qs}`);
-      const matches = Array.isArray(res.data) ? res.data : [];
-      if (!matches.length) throw new z.errors.Error(`No person found matching ${email ? `email "${email}"` : `name "${term || ""}"`}.`, "PersonNotFound", 404);
-      return matches[0];
+      const [person] = await findPeople(z, bundle);
+      if (person) return person;
+      if (personId) throw new z.errors.Error(`No person found with id "${personId}".`, "PersonNotFound", 404);
+      throw new z.errors.Error(`No person found matching ${email ? `email "${email}"` : `name "${term || ""}"`}.`, "PersonNotFound", 404);
     },
     sample: SAMPLES.person
   }
