@@ -45,8 +45,23 @@ const SAMPLES = {
   // ponytail: sample keys must be a subset of every delivered payload (Zapier T004) — batchId/method/currency vary by entry path, so they stay out.
   donation: { id: "smpl_donation", churchId: "smpl_church", personId: "smpl_person", personName: "Sample Person", donationDate: "2026-01-15T00:00:00.000Z", amount: 50, status: "complete" },
   groupMember: { id: "smpl_groupmember", churchId: "smpl_church", groupId: "smpl_group", groupName: "Sample Group", personId: "smpl_person", personName: "Sample Person" },
-  formSubmission: { id: "smpl_formsubmission", churchId: "smpl_church", formId: "smpl_form", formName: "Sample Form", contentType: "person", contentId: "smpl_person", personName: "Sample Person" }
+  formSubmission: { id: "smpl_formsubmission", churchId: "smpl_church", formId: "smpl_form", formName: "Sample Form", contentType: "person", contentId: "smpl_person", personName: "Sample Person" },
+  // The samples below hold only what the Api emits: the emit() payload plus the names and email WebhookDispatcher adds.
+  deletedPerson: { id: "smpl_person", churchId: "smpl_church", email: "sample@example.com" },
+  group: { id: "smpl_group", churchId: "smpl_church", name: "Sample Group", categoryName: "Sample Category" },
+  joinRequest: { id: "smpl_joinrequest", churchId: "smpl_church", groupId: "smpl_group", groupName: "Sample Group", personId: "smpl_person", personName: "Sample Person", personEmail: "sample@example.com", status: "pending" },
+  household: { id: "smpl_household", churchId: "smpl_church", name: "Sample Household" },
+  attendance: { id: "smpl_visit", churchId: "smpl_church", personId: "smpl_person", personName: "Sample Person", personEmail: "sample@example.com", visitDate: "2026-01-18T00:00:00.000Z", checkinTime: "2026-01-18T15:00:00.000Z" },
+  // Checkout payloads are visit rows read back from the database, which carry no churchId.
+  checkout: { id: "smpl_visit", personId: "smpl_person", personName: "Sample Person", personEmail: "sample@example.com", visitDate: "2026-01-18T00:00:00.000Z", checkinTime: "2026-01-18T15:00:00.000Z", checkoutTime: "2026-01-18T16:30:00.000Z", checkedOutBy: "Sample Parent" },
+  session: { id: "smpl_session", churchId: "smpl_church", groupId: "smpl_group", groupName: "Sample Group", sessionDate: "2026-01-18T00:00:00.000Z" },
+  event: { id: "smpl_event", churchId: "smpl_church", groupId: "smpl_group", title: "Sample Event", start: "2026-01-18T15:00:00.000Z", end: "2026-01-18T16:00:00.000Z" },
+  registration: { id: "smpl_registration", churchId: "smpl_church", eventId: "smpl_event", personId: "smpl_person", status: "confirmed", registeredDate: "2026-01-15T00:00:00.000Z", totalAmount: 25, amountPaid: 25, members: [{ id: "smpl_registrationmember", registrationId: "smpl_registration", personId: "smpl_person", firstName: "Sample", lastName: "Person" }] },
+  // List payloads have no id or churchId of their own.
+  listMember: { listId: "smpl_list", listName: "Sample List", personId: "smpl_person", personName: "Sample Person", personEmail: "sample@example.com" }
 };
+
+const deleted = (id) => ({ id, churchId: "smpl_church" });
 
 // Hook payloads only contain the fields that were set when the record was saved,
 // while the REST list endpoints return full DB rows. Zapier flags sample fields
@@ -54,10 +69,11 @@ const SAMPLES = {
 // the sample's keys.
 const pick = (keys) => (row) => Object.fromEntries(keys.filter((k) => row[k] !== undefined).map((k) => [k, row[k]]));
 
-const hookTrigger = ({ key, noun, label, description, event, listUrl, listTransform, sample }) => ({
+// Subscribing always needs settings:write; listScope is what listUrl needs to return live test data.
+const hookTrigger = ({ key, noun, label, description, event, listUrl, listScope, listTransform, sample, outputFields }) => ({
   key,
   noun,
-  display: { label, description },
+  display: { label, description: `${description} Requires the \`settings:write\` scope${listScope ? ` (plus \`${listScope}\` to test with real records)` : ""}.` },
   operation: {
     type: "hook",
     performSubscribe: async (z, bundle) => {
@@ -74,6 +90,8 @@ const hookTrigger = ({ key, noun, label, description, event, listUrl, listTransf
     },
     perform: (z, bundle) => [bundle.cleanedRequest.data],
     performList: async (z, bundle) => {
+      // Public hook triggers must have a performList; events with no list endpoint serve the static sample.
+      if (!listUrl) return [sample];
       try {
         const res = await z.request(`${base(bundle)}${listUrl}`);
         const rows = Array.isArray(res.data) ? res.data : [];
@@ -85,59 +103,61 @@ const hookTrigger = ({ key, noun, label, description, event, listUrl, listTransf
         return []; // key may lack a read scope — Zapier falls back to the static sample
       }
     },
+    ...(outputFields && { outputFields }),
     sample
   }
 });
 
 const byDateDesc = (field) => (rows) => [...rows].sort((a, b) => new Date(b[field] || 0) - new Date(a[field] || 0));
 
+// With no id in the payload, Zapier needs to be told what identifies a list member.
+const LIST_MEMBER_KEY = [
+  { key: "listId", label: "List ID", primary: true },
+  { key: "personId", label: "Person ID", primary: true }
+];
+
+// One row per webhook event (Api: src/shared/webhooks/WebhookEvents.ts), in that file's order.
+// listUrl is set only where a REST list returns rows shaped like the hook payload.
+const TRIGGERS = [
+  { key: "new_person", noun: "Person", label: "New Person", event: "person.created", description: "Triggers when a person is added in B1.", listUrl: "/membership/people/recent", listScope: "people:read", sample: SAMPLES.person },
+  { key: "updated_person", noun: "Person", label: "Updated Person", event: "person.updated", description: "Triggers when a person record is changed in B1.", listUrl: "/membership/people/recent", listScope: "people:read", sample: SAMPLES.person },
+  { key: "deleted_person", noun: "Person", label: "Deleted Person", event: "person.destroyed", description: "Triggers when a person is deleted or anonymized in B1.", sample: SAMPLES.deletedPerson },
+
+  { key: "new_group", noun: "Group", label: "New Group", event: "group.created", description: "Triggers when a group is created in B1.", listUrl: "/membership/groups", sample: SAMPLES.group },
+  { key: "updated_group", noun: "Group", label: "Updated Group", event: "group.updated", description: "Triggers when a group's settings are changed in B1.", listUrl: "/membership/groups", sample: SAMPLES.group },
+  { key: "deleted_group", noun: "Group", label: "Deleted Group", event: "group.destroyed", description: "Triggers when a group is deleted in B1.", sample: deleted("smpl_group") },
+
+  { key: "new_group_member", noun: "Group Member", label: "New Group Member", event: "group.member.added", description: "Triggers when a person is added to a group in B1.", listUrl: "/membership/groupmembers", listScope: "groups:read", sample: SAMPLES.groupMember },
+  { key: "removed_group_member", noun: "Group Member", label: "Removed Group Member", event: "group.member.removed", description: "Triggers when a person is removed from a group in B1.", sample: { ...SAMPLES.groupMember, personEmail: "sample@example.com" } },
+  { key: "new_group_join_request", noun: "Group Join Request", label: "New Group Join Request", event: "group.member.requested", description: "Triggers when a person asks to join a group that needs approval in B1.", sample: SAMPLES.joinRequest },
+
+  { key: "new_household", noun: "Household", label: "New Household", event: "household.created", description: "Triggers when a household is created in B1.", listUrl: "/membership/households", listScope: "people:read", sample: SAMPLES.household },
+  { key: "updated_household", noun: "Household", label: "Updated Household", event: "household.updated", description: "Triggers when a household is edited in B1.", listUrl: "/membership/households", listScope: "people:read", sample: SAMPLES.household },
+  { key: "deleted_household", noun: "Household", label: "Deleted Household", event: "household.destroyed", description: "Triggers when a household is deleted in B1.", sample: deleted("smpl_household") },
+
+  { key: "new_donation", noun: "Donation", label: "New Donation", event: "donation.created", description: "Triggers when a gift is recorded in B1, by manual entry or online giving.", listUrl: "/giving/donations", listScope: "donations:read", listTransform: byDateDesc("donationDate"), sample: SAMPLES.donation },
+  { key: "updated_donation", noun: "Donation", label: "Updated Donation", event: "donation.updated", description: "Triggers when an existing donation is edited in B1.", listUrl: "/giving/donations", listScope: "donations:read", listTransform: byDateDesc("donationDate"), sample: { ...SAMPLES.donation, personEmail: "sample@example.com" } },
+
+  { key: "new_attendance_record", noun: "Attendance Record", label: "New Attendance Record", event: "attendance.recorded", description: "Triggers when a person's attendance is recorded in B1, by check-in or by marking them present.", sample: SAMPLES.attendance },
+  { key: "new_attendance_checkout", noun: "Attendance Checkout", label: "New Attendance Checkout", event: "attendance.checkout", description: "Triggers when a person is checked out of a service or class in B1.", sample: SAMPLES.checkout },
+
+  { key: "new_attendance_session", noun: "Attendance Session", label: "New Attendance Session", event: "session.created", description: "Triggers when an attendance session (a group or service meeting on a date) is created in B1.", sample: SAMPLES.session },
+
+  { key: "new_form_submission", noun: "Form Submission", label: "New Form Submission", event: "form.submission.created", description: "Triggers when a form is submitted in B1.", listUrl: "/membership/formsubmissions", listScope: "forms:write", sample: SAMPLES.formSubmission },
+
+  { key: "new_event", noun: "Event", label: "New Event", event: "event.created", description: "Triggers when a calendar event is created in B1.", sample: SAMPLES.event },
+  { key: "updated_event", noun: "Event", label: "Updated Event", event: "event.updated", description: "Triggers when a calendar event is changed in B1.", sample: SAMPLES.event },
+  { key: "deleted_event", noun: "Event", label: "Deleted Event", event: "event.destroyed", description: "Triggers when a calendar event is deleted in B1.", sample: deleted("smpl_event") },
+
+  { key: "new_registration", noun: "Registration", label: "New Registration", event: "registration.created", description: "Triggers when someone registers for an event in B1.", sample: SAMPLES.registration },
+  { key: "cancelled_registration", noun: "Registration", label: "Cancelled Registration", event: "registration.cancelled", description: "Triggers when an event registration is cancelled in B1.", sample: { ...SAMPLES.registration, status: "cancelled", cancelledDate: "2026-01-16T00:00:00.000Z" } },
+
+  { key: "new_list_member", noun: "List Member", label: "New List Member", event: "list.member.added", description: "Triggers when the nightly refresh adds a person to an auto-refreshing list in B1.", outputFields: LIST_MEMBER_KEY, sample: SAMPLES.listMember },
+  { key: "removed_list_member", noun: "List Member", label: "Removed List Member", event: "list.member.removed", description: "Triggers when the nightly refresh removes a person from an auto-refreshing list in B1.", outputFields: LIST_MEMBER_KEY, sample: SAMPLES.listMember }
+];
+
 const triggers = {
-  new_person: hookTrigger({
-    key: "new_person",
-    noun: "Person",
-    label: "New Person",
-    description: "Triggers when a person is added in B1.",
-    event: "person.created",
-    listUrl: "/membership/people/recent",
-    sample: SAMPLES.person
-  }),
-  updated_person: hookTrigger({
-    key: "updated_person",
-    noun: "Person",
-    label: "Updated Person",
-    description: "Triggers when a person record is changed in B1.",
-    event: "person.updated",
-    listUrl: "/membership/people/recent",
-    sample: SAMPLES.person
-  }),
-  new_donation: hookTrigger({
-    key: "new_donation",
-    noun: "Donation",
-    label: "New Donation",
-    description: "Triggers when a gift is recorded in B1 — manual entry, online, or the pending → complete transition.",
-    event: "donation.created",
-    listUrl: "/giving/donations",
-    listTransform: byDateDesc("donationDate"),
-    sample: SAMPLES.donation
-  }),
-  new_group_member: hookTrigger({
-    key: "new_group_member",
-    noun: "Group Member",
-    label: "New Group Member",
-    description: "Triggers when a person is added to a group in B1.",
-    event: "group.member.added",
-    listUrl: "/membership/groupmembers",
-    sample: SAMPLES.groupMember
-  }),
-  new_form_submission: hookTrigger({
-    key: "new_form_submission",
-    noun: "Form Submission",
-    label: "New Form Submission",
-    description: "Triggers when a form is submitted in B1.",
-    event: "form.submission.created",
-    listUrl: "/membership/formsubmissions",
-    sample: SAMPLES.formSubmission
-  }),
+  ...Object.fromEntries(TRIGGERS.map((t) => [t.key, hookTrigger(t)])),
 
   // Hidden polling triggers that power dynamic dropdowns.
   list_groups: {
@@ -169,30 +189,45 @@ const triggers = {
   }
 };
 
-// An action rather than a search: searches can't be a Zap's last step, which
-// makes them untestable on free (2-step) plans. No match = explicit task error.
+const text = (value) => String(value || "").trim();
+
+const FIND_PERSON_FIELDS = [
+  { key: "personId", label: "Person", dynamic: "list_people.id.name__display", helpText: "Exact id lookup — pick a person or map a trigger's `personId` field. Takes precedence over email and name." },
+  { key: "email", label: "Email", helpText: "Exact email match. Takes precedence over name." },
+  { key: "term", label: "Name", helpText: "Matches part of a name. If several people match, the first by last name is used." }
+];
+
+// The API matches emails by substring and treats a blank term as "everyone", so emails
+// are narrowed to exact matches and a blank lookup finds nobody.
+const findPeople = async (z, bundle) => {
+  const personId = text(bundle.inputData.personId);
+  const email = text(bundle.inputData.email);
+  const term = text(bundle.inputData.term);
+  if (personId) {
+    const res = await z.request(`${base(bundle)}/membership/people/${encodeURIComponent(personId)}`);
+    return res.data ? [res.data] : [];
+  }
+  if (!email && !term) return [];
+  const qs = email ? `email=${encodeURIComponent(email)}` : `term=${encodeURIComponent(term)}`;
+  const res = await z.request(`${base(bundle)}/membership/people/search?${qs}`);
+  const matches = Array.isArray(res.data) ? res.data : [];
+  return email ? matches.filter((p) => text((p.contactInfo || {}).email).toLowerCase() === email.toLowerCase()) : matches;
+};
+
+// Kept as an action next to the find_person search: a search can't be a Zap's last
+// step, which makes it untestable on free (2-step) plans. No match = explicit task error.
 const findPerson = {
   key: "find_person",
   noun: "Person",
   display: { label: "Find Person", description: "Looks up a person by id, email, or name. Fails the task if nobody matches. Requires the `people:read` scope." },
   operation: {
-    inputFields: [
-      { key: "personId", label: "Person", dynamic: "list_people.id.name__display", helpText: "Exact id lookup — pick a person or map a trigger's `personId` field. Takes precedence over email and name." },
-      { key: "email", label: "Email", helpText: "Exact email match. Takes precedence over name." },
-      { key: "term", label: "Name" }
-    ],
+    inputFields: FIND_PERSON_FIELDS,
     perform: async (z, bundle) => {
       const { personId, email, term } = bundle.inputData;
-      if (personId) {
-        const res = await z.request(`${base(bundle)}/membership/people/${encodeURIComponent(personId)}`);
-        if (!res.data) throw new z.errors.Error(`No person found with id "${personId}".`, "PersonNotFound", 404);
-        return res.data;
-      }
-      const qs = email ? `email=${encodeURIComponent(email)}` : `term=${encodeURIComponent(term || "")}`;
-      const res = await z.request(`${base(bundle)}/membership/people/search?${qs}`);
-      const matches = Array.isArray(res.data) ? res.data : [];
-      if (!matches.length) throw new z.errors.Error(`No person found matching ${email ? `email "${email}"` : `name "${term || ""}"`}.`, "PersonNotFound", 404);
-      return matches[0];
+      const [person] = await findPeople(z, bundle);
+      if (person) return person;
+      if (personId) throw new z.errors.Error(`No person found with id "${personId}".`, "PersonNotFound", 404);
+      throw new z.errors.Error(`No person found matching ${email ? `email "${email}"` : `name "${term || ""}"`}.`, "PersonNotFound", 404);
     },
     sample: SAMPLES.person
   }
@@ -219,6 +254,46 @@ const creates = {
           body: [{ name: { first: firstName, last: lastName }, contactInfo: { email, mobilePhone } }]
         });
         return res.data[0];
+      },
+      sample: SAMPLES.person
+    }
+  },
+  update_person: {
+    key: "update_person",
+    noun: "Person",
+    display: { label: "Update Person", description: "Changes a person's name, contact details, or membership status in B1. Fields left blank keep their current value. Requires the `people:write` scope." },
+    operation: {
+      inputFields: [
+        { key: "personId", label: "Person", required: true, dynamic: "list_people.id.name__display" },
+        { key: "firstName", label: "First Name" },
+        { key: "lastName", label: "Last Name" },
+        { key: "email", label: "Email" },
+        { key: "mobilePhone", label: "Mobile Phone" },
+        { key: "membershipStatus", label: "Membership Status", choices: ["Visitor", "Guest", "Regular Attendee", "Member", "Staff", "Inactive", "Deceased"] }
+      ],
+      perform: async (z, bundle) => {
+        const { personId, firstName, lastName, email, mobilePhone, membershipStatus } = bundle.inputData;
+        const res = await z.request(`${base(bundle)}/membership/people/${encodeURIComponent(personId)}`);
+        if (!res.data) throw new z.errors.Error(`No person found with id "${personId}".`, "PersonNotFound", 404);
+        // Saving replaces the whole record: a field left out (birth date, anniversary) is cleared and
+        // the display name is rebuilt from first + last. So the full record is read and sent back, and
+        // the directory-only view a limited key gets (a name with no parts) is never saved.
+        const { formSubmissions, ...person } = res.data;
+        if (!person.name || !("first" in person.name)) {
+          throw new z.errors.Error("This API key can't read the full person record, so updating would erase data. Use a key with the `people:write` scope.", "PersonNotReadable", 403);
+        }
+        const changed = (fields) => Object.fromEntries(Object.entries(fields).filter(([, value]) => value));
+        const saved = await z.request({
+          method: "POST",
+          url: `${base(bundle)}/membership/people`,
+          body: [{
+            ...person,
+            ...changed({ membershipStatus }),
+            name: { ...person.name, first: firstName || person.name.first || "", last: lastName || person.name.last || "" },
+            contactInfo: { ...person.contactInfo, ...changed({ email, mobilePhone }) }
+          }]
+        });
+        return saved.data[0];
       },
       sample: SAMPLES.person
     }
@@ -276,6 +351,64 @@ const creates = {
       },
       sample: SAMPLES.groupMember
     }
+  },
+  remove_group_member: {
+    key: "remove_group_member",
+    noun: "Group Member",
+    display: { label: "Remove Group Member", description: "Removes a person from a group in B1. Fails the task if they are not in the group. Requires the `groups:write` scope." },
+    operation: {
+      inputFields: [
+        { key: "groupId", label: "Group", required: true, dynamic: "list_groups.id.name" },
+        { key: "personId", label: "Person", required: true, dynamic: "list_people.id.name__display" }
+      ],
+      perform: async (z, bundle) => {
+        const { groupId, personId } = bundle.inputData;
+        // The delete endpoint takes the membership's own id, so find that first.
+        const res = await z.request(`${base(bundle)}/membership/groupmembers?personId=${encodeURIComponent(personId)}`);
+        const member = (Array.isArray(res.data) ? res.data : []).find((gm) => gm.groupId === groupId);
+        if (!member) throw new z.errors.Error("That person is not a member of that group.", "GroupMemberNotFound", 404);
+        await z.request({ method: "DELETE", url: `${base(bundle)}/membership/groupmembers/${encodeURIComponent(member.id)}` });
+        return pick(["id", "churchId", "groupId", "personId"])(member);
+      },
+      sample: { id: "smpl_groupmember", churchId: "smpl_church", groupId: "smpl_group", personId: "smpl_person" }
+    }
+  }
+};
+
+const searches = {
+  find_person: {
+    key: "find_person",
+    noun: "Person",
+    display: { label: "Find Person", description: "Finds a person by id, email, or name. Requires the `people:read` scope." },
+    operation: {
+      inputFields: FIND_PERSON_FIELDS,
+      perform: findPeople,
+      sample: SAMPLES.person
+    }
+  },
+  find_group: {
+    key: "find_group",
+    noun: "Group",
+    display: { label: "Find Group", description: "Finds a group by its exact name, ignoring case. Works with any API key; it needs no extra scope." },
+    operation: {
+      inputFields: [{ key: "name", label: "Name", required: true }],
+      perform: async (z, bundle) => {
+        const name = text(bundle.inputData.name).toLowerCase();
+        if (!name) return [];
+        const res = await z.request(`${base(bundle)}/membership/groups`);
+        return (Array.isArray(res.data) ? res.data : []).filter((g) => text(g.name).toLowerCase() === name);
+      },
+      sample: SAMPLES.group
+    }
+  }
+};
+
+const searchOrCreates = {
+  find_person: {
+    key: "find_person",
+    display: { label: "Find or Create Person", description: "Finds a person by id, email, or name, and creates one if nobody matches. Requires the `people:write` scope." },
+    search: "find_person",
+    create: "create_person"
   }
 };
 
@@ -287,5 +420,7 @@ module.exports = {
   authentication,
   beforeRequest: [addAuth],
   triggers,
-  creates
+  creates,
+  searches,
+  searchOrCreates
 };
