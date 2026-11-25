@@ -45,8 +45,23 @@ const SAMPLES = {
   // ponytail: sample keys must be a subset of every delivered payload (Zapier T004) — batchId/method/currency vary by entry path, so they stay out.
   donation: { id: "smpl_donation", churchId: "smpl_church", personId: "smpl_person", personName: "Sample Person", donationDate: "2026-01-15T00:00:00.000Z", amount: 50, status: "complete" },
   groupMember: { id: "smpl_groupmember", churchId: "smpl_church", groupId: "smpl_group", groupName: "Sample Group", personId: "smpl_person", personName: "Sample Person" },
-  formSubmission: { id: "smpl_formsubmission", churchId: "smpl_church", formId: "smpl_form", formName: "Sample Form", contentType: "person", contentId: "smpl_person", personName: "Sample Person" }
+  formSubmission: { id: "smpl_formsubmission", churchId: "smpl_church", formId: "smpl_form", formName: "Sample Form", contentType: "person", contentId: "smpl_person", personName: "Sample Person" },
+  // The samples below hold only what the Api emits: the emit() payload plus the names and email WebhookDispatcher adds.
+  deletedPerson: { id: "smpl_person", churchId: "smpl_church", email: "sample@example.com" },
+  group: { id: "smpl_group", churchId: "smpl_church", name: "Sample Group", categoryName: "Sample Category" },
+  joinRequest: { id: "smpl_joinrequest", churchId: "smpl_church", groupId: "smpl_group", groupName: "Sample Group", personId: "smpl_person", personName: "Sample Person", personEmail: "sample@example.com", status: "pending" },
+  household: { id: "smpl_household", churchId: "smpl_church", name: "Sample Household" },
+  attendance: { id: "smpl_visit", churchId: "smpl_church", personId: "smpl_person", personName: "Sample Person", personEmail: "sample@example.com", visitDate: "2026-01-18T00:00:00.000Z", checkinTime: "2026-01-18T15:00:00.000Z" },
+  // Checkout payloads are visit rows read back from the database, which carry no churchId.
+  checkout: { id: "smpl_visit", personId: "smpl_person", personName: "Sample Person", personEmail: "sample@example.com", visitDate: "2026-01-18T00:00:00.000Z", checkinTime: "2026-01-18T15:00:00.000Z", checkoutTime: "2026-01-18T16:30:00.000Z", checkedOutBy: "Sample Parent" },
+  session: { id: "smpl_session", churchId: "smpl_church", groupId: "smpl_group", groupName: "Sample Group", sessionDate: "2026-01-18T00:00:00.000Z" },
+  event: { id: "smpl_event", churchId: "smpl_church", groupId: "smpl_group", title: "Sample Event", start: "2026-01-18T15:00:00.000Z", end: "2026-01-18T16:00:00.000Z" },
+  registration: { id: "smpl_registration", churchId: "smpl_church", eventId: "smpl_event", personId: "smpl_person", status: "confirmed", registeredDate: "2026-01-15T00:00:00.000Z", totalAmount: 25, amountPaid: 25, members: [{ id: "smpl_registrationmember", registrationId: "smpl_registration", personId: "smpl_person", firstName: "Sample", lastName: "Person" }] },
+  // List payloads have no id or churchId of their own.
+  listMember: { listId: "smpl_list", listName: "Sample List", personId: "smpl_person", personName: "Sample Person", personEmail: "sample@example.com" }
 };
+
+const deleted = (id) => ({ id, churchId: "smpl_church" });
 
 // Hook payloads only contain the fields that were set when the record was saved,
 // while the REST list endpoints return full DB rows. Zapier flags sample fields
@@ -54,10 +69,11 @@ const SAMPLES = {
 // the sample's keys.
 const pick = (keys) => (row) => Object.fromEntries(keys.filter((k) => row[k] !== undefined).map((k) => [k, row[k]]));
 
-const hookTrigger = ({ key, noun, label, description, event, listUrl, listTransform, sample }) => ({
+// Subscribing always needs settings:write; listScope is what listUrl needs to return live test data.
+const hookTrigger = ({ key, noun, label, description, event, listUrl, listScope, listTransform, sample, outputFields }) => ({
   key,
   noun,
-  display: { label, description },
+  display: { label, description: `${description} Requires the \`settings:write\` scope${listScope ? ` (plus \`${listScope}\` to test with real records)` : ""}.` },
   operation: {
     type: "hook",
     performSubscribe: async (z, bundle) => {
@@ -74,6 +90,8 @@ const hookTrigger = ({ key, noun, label, description, event, listUrl, listTransf
     },
     perform: (z, bundle) => [bundle.cleanedRequest.data],
     performList: async (z, bundle) => {
+      // Public hook triggers must have a performList; events with no list endpoint serve the static sample.
+      if (!listUrl) return [sample];
       try {
         const res = await z.request(`${base(bundle)}${listUrl}`);
         const rows = Array.isArray(res.data) ? res.data : [];
@@ -85,19 +103,57 @@ const hookTrigger = ({ key, noun, label, description, event, listUrl, listTransf
         return []; // key may lack a read scope — Zapier falls back to the static sample
       }
     },
+    ...(outputFields && { outputFields }),
     sample
   }
 });
 
 const byDateDesc = (field) => (rows) => [...rows].sort((a, b) => new Date(b[field] || 0) - new Date(a[field] || 0));
 
-// One row per webhook event (Api: src/shared/webhooks/WebhookEvents.ts).
+// With no id in the payload, Zapier needs to be told what identifies a list member.
+const LIST_MEMBER_KEY = [
+  { key: "listId", label: "List ID", primary: true },
+  { key: "personId", label: "Person ID", primary: true }
+];
+
+// One row per webhook event (Api: src/shared/webhooks/WebhookEvents.ts), in that file's order.
+// listUrl is set only where a REST list returns rows shaped like the hook payload.
 const TRIGGERS = [
-  { key: "new_person", noun: "Person", label: "New Person", event: "person.created", description: "Triggers when a person is added in B1.", listUrl: "/membership/people/recent", sample: SAMPLES.person },
-  { key: "updated_person", noun: "Person", label: "Updated Person", event: "person.updated", description: "Triggers when a person record is changed in B1.", listUrl: "/membership/people/recent", sample: SAMPLES.person },
-  { key: "new_donation", noun: "Donation", label: "New Donation", event: "donation.created", description: "Triggers when a gift is recorded in B1 — manual entry, online, or the pending → complete transition.", listUrl: "/giving/donations", listTransform: byDateDesc("donationDate"), sample: SAMPLES.donation },
-  { key: "new_group_member", noun: "Group Member", label: "New Group Member", event: "group.member.added", description: "Triggers when a person is added to a group in B1.", listUrl: "/membership/groupmembers", sample: SAMPLES.groupMember },
-  { key: "new_form_submission", noun: "Form Submission", label: "New Form Submission", event: "form.submission.created", description: "Triggers when a form is submitted in B1.", listUrl: "/membership/formsubmissions", sample: SAMPLES.formSubmission }
+  { key: "new_person", noun: "Person", label: "New Person", event: "person.created", description: "Triggers when a person is added in B1.", listUrl: "/membership/people/recent", listScope: "people:read", sample: SAMPLES.person },
+  { key: "updated_person", noun: "Person", label: "Updated Person", event: "person.updated", description: "Triggers when a person record is changed in B1.", listUrl: "/membership/people/recent", listScope: "people:read", sample: SAMPLES.person },
+  { key: "deleted_person", noun: "Person", label: "Deleted Person", event: "person.destroyed", description: "Triggers when a person is deleted or anonymized in B1.", sample: SAMPLES.deletedPerson },
+
+  { key: "new_group", noun: "Group", label: "New Group", event: "group.created", description: "Triggers when a group is created in B1.", listUrl: "/membership/groups", sample: SAMPLES.group },
+  { key: "updated_group", noun: "Group", label: "Updated Group", event: "group.updated", description: "Triggers when a group's settings are changed in B1.", listUrl: "/membership/groups", sample: SAMPLES.group },
+  { key: "deleted_group", noun: "Group", label: "Deleted Group", event: "group.destroyed", description: "Triggers when a group is deleted in B1.", sample: deleted("smpl_group") },
+
+  { key: "new_group_member", noun: "Group Member", label: "New Group Member", event: "group.member.added", description: "Triggers when a person is added to a group in B1.", listUrl: "/membership/groupmembers", listScope: "groups:read", sample: SAMPLES.groupMember },
+  { key: "removed_group_member", noun: "Group Member", label: "Removed Group Member", event: "group.member.removed", description: "Triggers when a person is removed from a group in B1.", sample: { ...SAMPLES.groupMember, personEmail: "sample@example.com" } },
+  { key: "new_group_join_request", noun: "Group Join Request", label: "New Group Join Request", event: "group.member.requested", description: "Triggers when a person asks to join a group that needs approval in B1.", sample: SAMPLES.joinRequest },
+
+  { key: "new_household", noun: "Household", label: "New Household", event: "household.created", description: "Triggers when a household is created in B1.", listUrl: "/membership/households", listScope: "people:read", sample: SAMPLES.household },
+  { key: "updated_household", noun: "Household", label: "Updated Household", event: "household.updated", description: "Triggers when a household is edited in B1.", listUrl: "/membership/households", listScope: "people:read", sample: SAMPLES.household },
+  { key: "deleted_household", noun: "Household", label: "Deleted Household", event: "household.destroyed", description: "Triggers when a household is deleted in B1.", sample: deleted("smpl_household") },
+
+  { key: "new_donation", noun: "Donation", label: "New Donation", event: "donation.created", description: "Triggers when a gift is recorded in B1 — manual entry, online, or the pending → complete transition.", listUrl: "/giving/donations", listScope: "donations:read", listTransform: byDateDesc("donationDate"), sample: SAMPLES.donation },
+  { key: "updated_donation", noun: "Donation", label: "Updated Donation", event: "donation.updated", description: "Triggers when an existing donation is edited in B1.", listUrl: "/giving/donations", listScope: "donations:read", listTransform: byDateDesc("donationDate"), sample: { ...SAMPLES.donation, personEmail: "sample@example.com" } },
+
+  { key: "new_attendance_record", noun: "Attendance Record", label: "New Attendance Record", event: "attendance.recorded", description: "Triggers when a person's attendance is recorded in B1, by check-in or by marking them present.", sample: SAMPLES.attendance },
+  { key: "new_attendance_checkout", noun: "Attendance Checkout", label: "New Attendance Checkout", event: "attendance.checkout", description: "Triggers when a person is checked out of a service or class in B1.", sample: SAMPLES.checkout },
+
+  { key: "new_attendance_session", noun: "Attendance Session", label: "New Attendance Session", event: "session.created", description: "Triggers when an attendance session (a group or service meeting on a date) is created in B1.", sample: SAMPLES.session },
+
+  { key: "new_form_submission", noun: "Form Submission", label: "New Form Submission", event: "form.submission.created", description: "Triggers when a form is submitted in B1.", listUrl: "/membership/formsubmissions", listScope: "forms:write", sample: SAMPLES.formSubmission },
+
+  { key: "new_event", noun: "Event", label: "New Event", event: "event.created", description: "Triggers when a calendar event is created in B1.", sample: SAMPLES.event },
+  { key: "updated_event", noun: "Event", label: "Updated Event", event: "event.updated", description: "Triggers when a calendar event is changed in B1.", sample: SAMPLES.event },
+  { key: "deleted_event", noun: "Event", label: "Deleted Event", event: "event.destroyed", description: "Triggers when a calendar event is deleted in B1.", sample: deleted("smpl_event") },
+
+  { key: "new_registration", noun: "Registration", label: "New Registration", event: "registration.created", description: "Triggers when someone registers for an event in B1.", sample: SAMPLES.registration },
+  { key: "cancelled_registration", noun: "Registration", label: "Cancelled Registration", event: "registration.cancelled", description: "Triggers when an event registration is cancelled in B1.", sample: { ...SAMPLES.registration, status: "cancelled", cancelledDate: "2026-01-16T00:00:00.000Z" } },
+
+  { key: "new_list_member", noun: "List Member", label: "New List Member", event: "list.member.added", description: "Triggers when the nightly refresh adds a person to an auto-refreshing list in B1.", outputFields: LIST_MEMBER_KEY, sample: SAMPLES.listMember },
+  { key: "removed_list_member", noun: "List Member", label: "Removed List Member", event: "list.member.removed", description: "Triggers when the nightly refresh removes a person from an auto-refreshing list in B1.", outputFields: LIST_MEMBER_KEY, sample: SAMPLES.listMember }
 ];
 
 const triggers = {

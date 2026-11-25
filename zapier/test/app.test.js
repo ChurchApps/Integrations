@@ -15,15 +15,143 @@ const fakeZ = (responses) => {
   };
 };
 
+// key, label, noun, event — one per event in the Api's WebhookEvents.ts.
+const HOOKS = [
+  ["new_person", "New Person", "Person", "person.created"],
+  ["updated_person", "Updated Person", "Person", "person.updated"],
+  ["deleted_person", "Deleted Person", "Person", "person.destroyed"],
+  ["new_group", "New Group", "Group", "group.created"],
+  ["updated_group", "Updated Group", "Group", "group.updated"],
+  ["deleted_group", "Deleted Group", "Group", "group.destroyed"],
+  ["new_group_member", "New Group Member", "Group Member", "group.member.added"],
+  ["removed_group_member", "Removed Group Member", "Group Member", "group.member.removed"],
+  ["new_group_join_request", "New Group Join Request", "Group Join Request", "group.member.requested"],
+  ["new_household", "New Household", "Household", "household.created"],
+  ["updated_household", "Updated Household", "Household", "household.updated"],
+  ["deleted_household", "Deleted Household", "Household", "household.destroyed"],
+  ["new_donation", "New Donation", "Donation", "donation.created"],
+  ["updated_donation", "Updated Donation", "Donation", "donation.updated"],
+  ["new_attendance_record", "New Attendance Record", "Attendance Record", "attendance.recorded"],
+  ["new_attendance_checkout", "New Attendance Checkout", "Attendance Checkout", "attendance.checkout"],
+  ["new_attendance_session", "New Attendance Session", "Attendance Session", "session.created"],
+  ["new_form_submission", "New Form Submission", "Form Submission", "form.submission.created"],
+  ["new_event", "New Event", "Event", "event.created"],
+  ["updated_event", "Updated Event", "Event", "event.updated"],
+  ["deleted_event", "Deleted Event", "Event", "event.destroyed"],
+  ["new_registration", "New Registration", "Registration", "registration.created"],
+  ["cancelled_registration", "Cancelled Registration", "Registration", "registration.cancelled"],
+  ["new_list_member", "New List Member", "List Member", "list.member.added"],
+  ["removed_list_member", "Removed List Member", "List Member", "list.member.removed"]
+];
+// Triggers whose test data comes from a REST list, and the scope that list needs (null = any key).
+const LISTS = {
+  new_person: ["/membership/people/recent", "people:read"],
+  updated_person: ["/membership/people/recent", "people:read"],
+  new_group: ["/membership/groups", null],
+  updated_group: ["/membership/groups", null],
+  new_group_member: ["/membership/groupmembers", "groups:read"],
+  new_household: ["/membership/households", "people:read"],
+  updated_household: ["/membership/households", "people:read"],
+  new_donation: ["/giving/donations", "donations:read"],
+  updated_donation: ["/giving/donations", "donations:read"],
+  new_form_submission: ["/membership/formsubmissions", "forms:write"]
+};
+
 test("app surface matches the support docs", () => {
   assert.deepEqual(
     Object.keys(App.triggers).sort(),
-    ["list_funds", "list_groups", "list_people", "new_donation", "new_form_submission", "new_group_member", "new_person", "updated_person"]
+    [...HOOKS.map(([key]) => key), "list_funds", "list_groups", "list_people"].sort()
   );
   assert.deepEqual(Object.keys(App.creates).sort(), ["add_donation", "add_group_member", "create_person", "find_person"]);
   assert.equal(App.searches, undefined);
-  for (const key of ["new_person", "updated_person", "new_donation", "new_group_member", "new_form_submission"]) {
-    assert.equal(App.triggers[key].operation.type, "hook", key);
+});
+
+test("there is one hook trigger per webhook event, following Zapier's publishing conventions", () => {
+  assert.equal(new Set(HOOKS.map(([, , , event]) => event)).size, 25);
+  for (const [key, label, noun] of HOOKS) {
+    const trigger = App.triggers[key];
+    assert.match(key, /^[a-z]+(_[a-z]+)*$/, key);
+    assert.equal(trigger.key, key);
+    assert.equal(trigger.noun, noun, key);
+    assert.equal(trigger.display.label, label, key);
+    assert.match(trigger.display.label, /^([A-Z][a-z]+)( [A-Z][a-z]+)*$/, key);
+    assert.match(trigger.display.description, /^Triggers when .+ Requires the `settings:write` scope( \(plus `[a-z]+:[a-z]+` to test with real records\))?\.$/, key);
+    assert.equal(trigger.operation.type, "hook", key);
+  }
+});
+
+test("the five original triggers keep their keys and output fields", () => {
+  const fields = (key) => Object.keys(App.triggers[key].operation.sample);
+  assert.deepEqual(fields("new_person"), ["id", "churchId", "name", "contactInfo"]);
+  assert.deepEqual(Object.keys(App.triggers.new_person.operation.sample.name), ["display", "first", "last"]);
+  assert.deepEqual(Object.keys(App.triggers.new_person.operation.sample.contactInfo), ["email"]);
+  assert.deepEqual(fields("updated_person"), fields("new_person"));
+  assert.deepEqual(fields("new_donation"), ["id", "churchId", "personId", "personName", "donationDate", "amount", "status"]);
+  assert.deepEqual(fields("new_group_member"), ["id", "churchId", "groupId", "groupName", "personId", "personName"]);
+  assert.deepEqual(fields("new_form_submission"), ["id", "churchId", "formId", "formName", "contentType", "contentId", "personName"]);
+});
+
+test("every trigger subscribes to its own event and unsubscribes by webhook id", async () => {
+  for (const [key, , , event] of HOOKS) {
+    const z = fakeZ([{ id: "wh1", secret: "s" }]);
+    const sub = await App.triggers[key].operation.performSubscribe(z, bundle);
+    assert.equal(z.calls[0].method, "POST", key);
+    assert.equal(z.calls[0].url, "https://api.churchapps.org/membership/webhooks", key);
+    assert.deepEqual(z.calls[0].body, { name: `Zapier — ${event}`, url: bundle.targetUrl, events: [event] }, key);
+    assert.equal(sub.id, "wh1", key);
+
+    const z2 = fakeZ([{}]);
+    await App.triggers[key].operation.performUnsubscribe(z2, { ...bundle, subscribeData: { id: "wh1" } });
+    assert.equal(z2.calls[0].method, "DELETE", key);
+    assert.equal(z2.calls[0].url, "https://api.churchapps.org/membership/webhooks/wh1", key);
+  }
+});
+
+test("every trigger unwraps the B1 envelope", () => {
+  for (const [key, , , event] of HOOKS) {
+    const data = { ...App.triggers[key].operation.sample };
+    const out = App.triggers[key].operation.perform(null, { cleanedRequest: { event, churchId: "c1", occurredAt: "2026-01-01T00:00:00Z", data } });
+    assert.deepEqual(out, [data], key);
+  }
+});
+
+test("every trigger has a sample with ISO dates and something that identifies the record", () => {
+  const isoDate = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+  for (const [key] of HOOKS) {
+    const { sample, outputFields } = App.triggers[key].operation;
+    const primary = (outputFields || []).filter((f) => f.primary).map((f) => f.key);
+    for (const field of primary.length ? primary : ["id"]) assert.ok(sample[field], `${key}.${field}`);
+    for (const [field, value] of Object.entries(sample)) {
+      if (/(Date|Time)$/.test(field) || field === "start" || field === "end") assert.match(value, isoDate, `${key}.${field}`);
+    }
+  }
+  assert.deepEqual(App.triggers.new_list_member.operation.outputFields.filter((f) => f.primary).map((f) => f.key), ["listId", "personId"]);
+});
+
+test("triggers with a list endpoint poll it for test data, projected to the sample's keys", async () => {
+  for (const [key, [url]] of Object.entries(LISTS)) {
+    const { sample, performList } = App.triggers[key].operation;
+    const row = { ...sample, id: "live1", notInTheHookPayload: true };
+    const z = fakeZ([[row, { noId: true }]]);
+    const out = await performList(z, bundle);
+    assert.equal(z.calls[0].url, `https://api.churchapps.org${url}`, key);
+    assert.deepEqual(out, [{ ...sample, id: "live1" }], key);
+  }
+});
+
+test("trigger descriptions name the scope their list endpoint needs", () => {
+  for (const [key] of HOOKS) {
+    const scope = (LISTS[key] || [])[1];
+    const mentioned = (App.triggers[key].display.description.match(/plus `([a-z]+:[a-z]+)`/) || [])[1];
+    assert.equal(mentioned, scope || undefined, key);
+  }
+});
+
+test("triggers without a list endpoint serve their static sample as test data", async () => {
+  const z = { request: async () => { throw new Error("should not call the API"); } };
+  for (const [key] of HOOKS.filter(([k]) => !LISTS[k])) {
+    const { sample, performList } = App.triggers[key].operation;
+    assert.deepEqual(await performList(z, bundle), [sample], key);
   }
 });
 
